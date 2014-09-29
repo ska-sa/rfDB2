@@ -21,16 +21,36 @@ class current_spectra:
         res = self.c_rfi.fetchall()
         self.which_db=(res[0][0]+0)
 
+        if mode == 'c':
+            try:
+                self.current = numpy.memmap("/tmp/current.dat", dtype="float64", mode='r+', shape = (3600,cnf.modes[0]['n_chan']))
+                self.timestamp = numpy.memmap("/tmp/timestamp.dat", dtype="int64", mode = 'r+', shape = (3600,))
+                self.modes = numpy.memmap("/tmp/modes.dat", dtype="int8", mode = 'r+', shape = (3600,))
+                self.head = numpy.memmap("/tmp/head.dat", dtype="int32", mode = 'r+', shape = (1,))
+            except FileNotFoundError:
+                self.current = numpy.memmap("/tmp/current.dat", dtype="float64", mode='w+', shape = (3600,cnf.modes[0]['n_chan']))
+                self.timestamp = numpy.memmap("/tmp/timestamp.dat", dtype="int64", mode = 'w+', shape = (3600,))
+                self.modes = numpy.memmap("/tmp/modes.dat", dtype="int8", mode = 'w+', shape = (3600,))
+                self.head = numpy.memmap("/tmp/head.dat", dtype="int32", mode = 'w+', shape = (1,))
+        else:
+            self.current = numpy.memmap("/tmp/current.dat", dtype="float64", mode='r', shape = (3600, cnf.modes[0]['n_chan']))
+            self.timestamp = numpy.memmap("/tmp/timestamp.dat", dtype="int64", mode = 'r', shape = (3600,))
+            self.modes = numpy.memmap("/tmp/modes.dat", dtype="int8", mode = 'r', shape = (3600,))
+            self.head = numpy.memmap("/tmp/head.dat", dtype="int32", mode = 'r', shape = (1,))
+            # self.lock = numpy.memmap("/tmp/lock.dat", dtype="int32", mode = 'r', shape = (1,))
+
         # self.fd = os.open('/tmp/mmaptest', os.O_CREAT | os.O_TRUNC | os.O_RDWR)
         # assert os.write(self.fd, '\x00' * mmap.PAGESIZE * 1024) == mmap.PAGESIZE * 1024
         # self.buf = mmap.mmap(self.fd, mmap.PAGESIZE * 1024, mmap.MAP_SHARED, mmap.PROT_WRITE)
         # self.current_spectrum = ctypes.c_char_p.from_buffer(self.buf)
         if mode == 'c':
             self.curr = numpy.memmap("/tmp/curr.dat", dtype="float32", mode='w+', shape = (cnf.modes[0]['n_chan'],))
-            self.timestamp = numpy.memmap("/tmp/time.dat", dtype="int64", mode = 'w+', shape = (1,))
+            self.time = numpy.memmap("/tmp/time.dat", dtype="int64", mode = 'w+', shape = (1,))
+            self.mode = numpy.memmap("/tmp/mode.dat", dtype="int8", mode = 'w+', shape = (1,))
         else:
             self.curr = numpy.memmap("/tmp/curr.dat", dtype="float32", mode='r', shape = (cnf.modes[0]['n_chan'],))
-            self.timestamp = numpy.memmap("/tmp/time.dat", dtype="int64", mode = 'r', shape = (1,))
+            self.time = numpy.memmap("/tmp/time.dat", dtype="int64", mode = 'r', shape = (1,))
+            self.mode = numpy.memmap("/tmp/mode.dat", dtype="int8", mode = 'r', shape = (1,))
 
     def insertSpectrum (self, spectrum, timestamp, mode):
         # print "pikckling"
@@ -44,7 +64,15 @@ class current_spectra:
         # # print current_spectrum.raw[:100]
         # print 'First 10 bytes of memory mapping: %r' % self.buf[:100]
         self.curr[:] = spectrum[:]
-        self.timestamp[:] = numpy.array([timestamp,])[:]
+        self.time[:] = numpy.array([timestamp,])[:]
+        self.mode[0] = mode
+
+        self.head[0] = (self.head[0] + 1) % 3600
+
+        self.current[self.head[0]] = spectrum
+        self.timestamp[self.head[0]] = int(timestamp)
+        self.modes[self.head[0]] = mode
+        print "head = %i "%self.head[0]
 
         print "inserting"
         self.c_rfi.execute("INSERT IGNORE INTO spectra_%s (timestamp, spectrum, mode) values (%s,%s, %s)",(self.which_db, timestamp, specS, mode))
@@ -60,12 +88,12 @@ class current_spectra:
         # result = self.c_rfi.fetchone()
         # self.c_rfi.execute("FLUSH QUERY CACHE")
 
-        result = [self.curr, self.timestamp[0]]
+        result = [self.curr, self.time[0], self.mode[0]]
 
-        print "current timestamp = %i"%self.timestamp[0]
+        # print "current timestamp = %i"%self.time[0]
 
         while self.last_timestamp == result[1]: #Current timestamp equals last timestamp
-            result = [self.curr, self.timestamp[0]]
+            result = [self.curr, self.time[0], self.mode[0]]
             time.sleep(0.1)
             # res = self.c_rfi.fetchall()
             # if res[0][0] != self.which_db: #Check if using the correct DB
@@ -76,7 +104,7 @@ class current_spectra:
             #     self.c_rfi.execute("FLUSH QUERY CACHE")
             #     time.sleep(0.1)
         self.last_timestamp = result[1]
-        return (result[0], result[1])
+        return (result[0], result[1], result[2] - 1)
 
     def deleteOld(self, timestamp):
         p = Process(target=deleteProcess, args=(self.which_db,))
@@ -104,6 +132,36 @@ class current_spectra:
         if channel != -1:
             return temp[:,channel], timestamps[:,channel]
         return temp, timestamps
+
+    def getRangeMem(self, secs, endTime, mode_chan, channel = -1):
+        import pdb
+        # pdb.set_trace()
+        res = None
+        valid = None
+        print "mode_chan = %s"%str(mode_chan)
+
+        for m_c in mode_chan:
+            if m_c[0] in self.modes:
+                mode = m_c[0]
+                print "mode = %i"%mode
+                channel = m_c[1]
+                valid = numpy.where(self.modes == mode)
+            elif valid == None: 
+                valid = []
+
+        print "self.modes = %s"%str(self.modes)
+        print "valid = %s"%str(valid) 
+        print "self.timestamp[valid] = %s"%str(self.timestamp[valid])
+        sort = numpy.argsort(self.timestamp[valid])
+        indices = numpy.where ((self.timestamp[valid][sort] > endTime - secs) & (self.timestamp[valid][sort] <= endTime))
+        print indices
+
+        
+        print "channel = %i"%channel
+        # if channel == -1:
+        #     return self.current[sort][indices], self.timestamp[sort][indices]
+        # else:
+        return self.current[valid][sort][indices][:,channel], self.timestamp[valid][sort][indices]
 
     def close(self):
         self.c_rfi.close()

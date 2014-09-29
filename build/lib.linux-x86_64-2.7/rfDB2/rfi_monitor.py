@@ -16,7 +16,7 @@ import signal
 import sys
 
 numLoops = 10
-mode = 1
+mode = 2
 
 db = None
 p1 = None
@@ -54,9 +54,12 @@ def threadInsert (queue):
     location = "%s%s"%(path,fileName)
     if not os.path.exists(path):
         os.makedirs(path)
-    f = h5py.File(location, 'w')
-    f.create_dataset('spectra', (3600, cnf.modes[0]['n_chan']),chunks = (4, cnf.modes[0]['n_chan']), dtype = np.float32, compression='gzip', compression_opts=4)
-    f.create_dataset('mode', (3600,), dtype=np.int8)
+    f = h5py.File(location, 'a')
+    try:
+        f.create_dataset('spectra', (3600, cnf.modes[mode-1]['n_chan']),chunks = (4, cnf.modes[mode-1]['n_chan']), dtype = np.float32, compression='gzip', compression_opts=4)
+        f.create_dataset('mode', (3600,), dtype=np.int8)
+    except:
+        print "file exists"
     last_hour = localtime[3]
     last_timestamp = data['timestamp']
     hourstart, hourend = dbControl.get_hour(data['timestamp'])
@@ -65,14 +68,17 @@ def threadInsert (queue):
         if (last_hour != localtime[3]): #If new hour
             #Save file
             f.flush()
-            f.close()
+
+            #Archive last hour
+            p3 = Process(target=threadArchive, args = (last_timestamp, f ,archive_added_event))
+            p3.start()
+
+            
 
             #Event to synchronise archive and rfi detection
             #archive_added_event = Event()
 
-            #Archive last hour
-            # p3 = Process(target=threadArchive, args = (last_timestamp,archive_added_event))
-            # p3.start()
+            
 
             #Detect RFI and archive
             # p4 = Process(target=threadRFIDetection, args = (last_timestamp,archive_added_event))
@@ -88,7 +94,7 @@ def threadInsert (queue):
             if not os.path.exists(path):
                 os.makedirs(path)
             f = h5py.File(location, mode='w')
-            f.create_dataset('spectra', (3600, cnf.modes[0]['n_chan']),chunks = (4, cnf.modes[0]['n_chan']), dtype = np.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('spectra', (3600, cnf.modes[mode -1]['n_chan']),chunks = (4, cnf.modes[mode -1]['n_chan']), dtype = np.float32, compression='gzip', compression_opts=4)
             f.create_dataset('mode', (3600,), dtype=np.int8)
 
             #reset time keeping variables to current hour
@@ -107,14 +113,15 @@ def threadInsert (queue):
     current.close()
     #f.close()
 
-def threadArchive (timestamp, archive_added_event):
+def threadArchive (timestamp, hourFile, archive_added_event):
     print "In archive thread"
     timeT = time.time()
-    rf_archive = arch.archive_rfi_spectra()
+    rf_archive = dbControl.dbControl(cnf.monitor_db[0], cnf.monitor_db[1], cnf.monitor_db[2], cnf.monitor_db[3])
     #rf_archive.connect()
     print "Connected to DB, Start processing"
-    rf_archive.archive_last_hour(timestamp, False)
+    rf_archive.calc_hourly_data(timestamp, hourFile)
     rf_archive.exit()
+    f.close()
     archive_added_event.set()
     print "exiting rf archival, took %i seconds"%(time.time()-timeT)
 

@@ -107,6 +107,82 @@ class dbControl:
         f.flush()
         self.con.commit() 
 
+    def calc_hourly_data(self, timestamp, hourFile):
+        from scipy.stats import itemfreq
+        func_list = ['min', 'max', 'mean', 'std']
+        modes = itemfreq(hourFile['mode'])
+
+        for m in modes:
+            if m[0] != 0:
+                #-----------_Calc Stats------------------------
+                start = time.time()
+                coverage = m[1]/float(3600)
+                print "coverage = %f"%coverage
+                indices = numpy.where(hourFile['mode'] == m[0])
+                means = numpy.mean(hourFile['spectra'], axis=0)
+                mins = numpy.min(hourFile['spectra'], axis=0)
+                maxs = numpy.max(hourFile['spectra'], axis=0)
+                stdDevs = numpy.std(hourFile['spectra'], axis=0)
+                print "stats took %is"%(time.time() - start)
+                start = time.time()
+                sorts = numpy.sort(hourFile['spectra'], axis=0)
+                print "sorts took %is"%(time.time() - start)
+                f, indices= self.get_month_file(timestamp, m[0]) #OPEN FILE
+
+                #INSERT STATS
+                start = time.time()
+                f['coverage'][indices[0],indices[1]] = coverage
+                f['min'][indices[0],indices[1]] = mins
+                f['max'][indices[0],indices[1]] = maxs
+                f['mean'][indices[0],indices[1]] = means
+                f['stddev'][indices[0],indices[1]] = stdDevs
+                f['median'][indices[0],indices[1]] = sorts[int(m[1] * 0.5)]
+                f['perc99'][indices[0],indices[1]] = sorts[int(m[1] * 0.99)]
+                f['perc95'][indices[0],indices[1]] = sorts[int(m[1] * 0.95)]
+                f['perc90'][indices[0],indices[1]] = sorts[int(m[1] * 0.9)]
+                f['perc10'][indices[0],indices[1]] = sorts[int(m[1] * 0.1)]
+                f['perc5'][indices[0],indices[1]] = sorts[int(m[1] * 0.05)]
+                f['perc1'][indices[0],indices[1]] = sorts[int(m[1] * 0.01)]
+
+                print "insert took %is"%(time.time() - start)
+
+                #save file
+                f.flush()
+                f.close()
+
+    def get_month_file(self, timestamp, mode):
+        localtime = time.localtime(timestamp)
+        fileName = "%04i_%02i.h5"%(localtime[0],localtime[1]) #Filename is the hour of the observation
+        path = os.path.join('%s/rfi_data'%conf.root_dir, str(localtime[0]),"%02i"%localtime[1],"mode%02i"%mode,'') #Filepath year/month/day of the observation
+        location = "%s%s"%(path,fileName)
+        print location
+        if not os.path.exists(path):
+            os.makedirs(path)
+        if os.path.isfile(location):
+            f = h5py.File(location, 'r+')
+        else:
+            from calendar import monthrange
+            n_days = monthrange(localtime[0],localtime[1])[1]
+            f = h5py.File(location, 'w')
+            f.create_dataset('coverage', (n_days, 24), dtype=numpy.float32)
+            f.create_dataset('min', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('max', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('mean', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('stddev', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('median', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('perc99', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('perc95', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('perc90', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('perc1', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('perc5', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('perc10', (n_days, 24, conf.modes[mode-1]['n_chan']), dtype=numpy.float32, compression='gzip', compression_opts=4)
+        
+        indices = (localtime[2],localtime[3]) #day,hour
+        print "indices = %s"%str(indices)
+
+        return f, indices
+
+
     def calcMetaData(self, data):
         ret = {}
 
@@ -169,7 +245,7 @@ class dbControl:
 
     #enter unix timestamps for startTime and endTime, enter a particular channel number if you would like only 1 channel, enter a tuple channelRange = (lowchannel, highchannel)
     #if you would like a range of channels
-    def rfi_monitor_get_range(self, startTime, endTime, mode, channel = -1, channelRange = (0,conf.modes[0]['n_chan'])):
+    def rfi_monitor_get_range(self, startTime, endTime, mode_chan):
         
         # self.cur.execute ("SELECT DISTINCT fileLocation FROM spectra WHERE timestamp >= %s AND timestamp < %s", (startTime, endTime))
         # res = self.cur.fetchall()
@@ -181,13 +257,13 @@ class dbControl:
         lastHour = datetime.datetime(now.year,now.month,now.day,now.hour)
         nHours = None
 
-        nHours = (endTuple.day - startTuple.day) * 24  + endTuple.hour - startTuple.hour
+        timeDiff = endTuple - startTuple
+        nSpectra = int(timeDiff.total_seconds())
+        nHours = int(nSpectra/3600)
 
         print "startTuple"
         print startTuple
         print "nHours = %i"%nHours
-
-        # files = [False for i in range (nHours)]
 
         fileName = "%02i.h5"%(startTuple.hour) #Filename is the hour of the observation
         path = os.path.join("%s/rfi_data"%conf.root_dir, str(startTuple.year), "%02i"%startTuple.month, "%02i"%startTuple.day,'') #Filepath year/month/day of the observation
@@ -195,46 +271,48 @@ class dbControl:
 
         ret = None
 
-        nSecs = startTuple.minute*60 + startTuple.second
+        nSecs = startTuple.minute * 60 + startTuple.second
 
-        nSpectra = (nHours) * 3600 - nSecs + endTuple.minute*60 + endTuple.second
         print "nSpectra = %i"%nSpectra;
 
-        if (channel != -1): #only want one channel
-            ret = numpy.zeros((nSpectra,), dtype=numpy.float64)
-        else:
-            ret = numpy.zeros((nSpectra,channelRange[1] - channelRange[0]), dtype=numpy.float64)
-
-        if os.path.isfile(location):
-            # files[0] = True
-            try:
-                f = h5py.File(location, 'r')
-                print f['spectra'].shape
-                indices = numpy.where(f['mode'][nSecs:3600,channel] == mode)
-                if (channel != -1):
-                    ret[0:3600 - nSecs][indices] = f['spectra'][nSecs:3600,channel][indices]
-                else:
-                    ret[0:3600 - nSecs][indices] = f['spectra'][nSecs:3600,channelRange[0]:channelRange[1]][indices]
-                nSecs = 3600 - nSecs
-                print "GOT %s"%location
-                print "max = %f"%numpy.max(ret)
-                print "min = %f"%numpy.min(ret)
-            except IOError as e:
-                nSecs = 3600 - nSecs
-                print e
-
-        currentTime = startTuple + datetime.timedelta(hours=1)
+        ret = numpy.zeros((nSpectra,), dtype=numpy.float64)
 
         current = 0
-
-        print "endtuple = %s, lastHour = %s"%(str(endTuple),str(lastHour))
-        print "endTuple > lastHour?"
-        print (endTuple > lastHour)
 
         if endTuple > lastHour:
             current = 1
 
+        mode = 0
+        channel = -1
+        indices = None
+
+        try:
+            f = h5py.File(location, 'r')
+            print f['spectra'].shape
+            for m_c in mode_chan:
+                if m_c[0] in f['mode'][nSecs:3600]:
+                    mode = m_c[0]
+                    channel = m_c[1]
+                    indices = numpy.where(f['mode'][nSecs:3600] == mode)
+                elif indices == None:
+                    indices = []
+
+            ret[0:3600 - nSecs][indices] = f['spectra'][nSecs:3600,channel][indices]
+            nSecs = 3600 - nSecs
+            print "GOT %s"%location
+            print "max = %f"%numpy.max(ret)
+            print "min = %f"%numpy.min(ret)
+        except IOError as e:
+            nSecs = 3600 - nSecs
+            print e
+            print "NO FILE %s"%location
+
+        currentTime = startTuple + datetime.timedelta(hours=1)
+
+        print "endtuple = %s, lastHour = %s"%(str(endTuple),str(lastHour))
+
         for i in range(nHours - current):
+            indices = None
             fileName = "%02i.h5"%(currentTime.hour) #Filename is the hour of the observation
             path = os.path.join("%s/rfi_data"%conf.root_dir, str(currentTime.year), "%02i"%currentTime.month, "%02i"%currentTime.day,'') #Filepath year/month/day of the observation
             location = "%s%s"%(path,fileName)
@@ -243,15 +321,23 @@ class dbControl:
             try:
                 f = h5py.File(location, 'r')
                 nS = 3600
+                print "ret.shape[0]"
+                print ret.shape[0]
                 if (ret.shape[0] - nSecs < 3600):
                     nS = ret.shape[0] - nSecs
-                indices = numpy.where(f['mode'][:nS,channel] == mode)
-                if (channel != -1):
-                    print "f['spectra'].shape"
-                    print f['spectra'].shape
+                for m_c in mode_chan:
+                    print "m_c = %s"%str(m_c)
+                    if m_c[0] in f['mode']:
+                        mode = m_c[0]
+                        channel = m_c[1]
+                        indices = numpy.where(f['mode'][:nS] == mode)
+                    elif indices == None:
+                        indices = []
+
+                print "indices"
+                print indices
+                if (ret.shape[0] != nSecs):
                     ret[nSecs:nSecs + nS][indices] = f['spectra'][:nS,channel][indices]
-                else:
-                    ret[nSecs:nSecs + nS][indices] = f['spectra'][:nS,channelRange[0]:channelRange[1]][indices]
                 nSecs += 3600
                 print "max = %f"%numpy.max(ret)
                 print "min = %f"%numpy.min(ret)
@@ -270,19 +356,17 @@ class dbControl:
         if current == 1:
             print "IN current"
             import rfDB2.current_spectra as current_spectra
-            curr = current_spectra.current_spectra();
-            print ("Getting %i mintues and %i seconds = %i seconds"%(endTuple.minute, endTuple.second, endTuple.minute * endTuple.second))
-            spectra, times = curr.getRange(endTuple.minute * 60 + endTuple.second, endTime, mode)
+            curr = current_spectra.current_spectra(mode = 'r');
+            print ("Getting %i mintues and %i seconds = %i seconds"%(endTuple.minute, endTuple.second, endTuple.minute * 60 + endTuple.second))
+            spectra, times = curr.getRangeMem(endTuple.minute * 60 + endTuple.second, endTime, mode_chan)
             print spectra.shape
-            if (channel != -1):
-                print spectra.shape
-                print "ret shape = %s and spectra shape = %s and spectra[:,channel].shape = %s"%(str(ret[nSecs:].shape), str(spectra.shape), str(spectra[:,channel].shape))
-                ret[nSecs - 1:] = spectra[:ret[nSecs:].shape[0] +1,channel]
-            else:
-                print "ret shape = %s and spectra shape = %s"%(str(ret[nSecs:].shape), str(spectra.shape))
-                ret[nSecs - 1:] = spectra[:ret[nSecs:].shape[0] + 1]
+            print spectra.shape
+            # print "ret shape = %s and spectra shape = %s and spectra[:,channel].shape = %s"%(str(ret[nSecs:].shape), str(spectra.shape), str(spectra[:,channel].shape))
+            indices = times + int(endTuple.minute*60 + endTuple.second - endTime - 1)
+            # print indices
+            ret[nSecs:][indices] = spectra[:ret[nSecs:].shape[0]]
 
-            print "current min = %s and current max = %s"%(str(spectra[:,channel].min()), str(spectra[:,channel].max()))
+            # print "current min = %s and current max = %s"%(str(spectra[:,channel].min()), str(spectra[:,channel].max()))
             print ret[:5]
             print ret[-5:]
             print numpy.where(ret > 0.0)
@@ -299,17 +383,17 @@ class dbControl:
         # mean = numpy.mean(ret[ret != 0.0], axis = 0)
         # ret[ret==0.0] = mean
 
-        # Interpolate zeroes
+        #Interpolate zeroes
         if channel != -1:
             z = numpy.where(ret==0.0)[0]
             nz = numpy.where (ret!=0.0)[0]
             ret[ret==0.0]=numpy.interp(z,nz,ret[nz])
 
-        # z = numpy.where(ret > (100))[0]
-        # nz = numpy.where(ret < (100))[0]
-        # print z[0:5]
-        # print nz[0:5]
-        # ret[ret > 10 ** 20]=numpy.interp(z,nz,ret[nz])
+        z = numpy.where(ret > (100))[0]
+        nz = numpy.where(ret < (100))[0]
+        print z[0:5]
+        print nz[0:5]
+        ret[ret > 10 ** 2]=numpy.interp(z,nz,ret[nz])
 
         print "check"
         print "nSPectra = %s"%nSpectra
@@ -491,42 +575,44 @@ if __name__ == '__main__':
     # rat = ratty1.cam.spec()
     # rat.connect()
     # rat.initialise()
+    # monitor = dbControl("localhost", "root", "kat", "monitor")
+
+    # mini = monitor.rfi_monitor_get_oldest_timestamp()
+    # print "mini"
+    # print mini
+    # sTimestamp = int(time.time()) - 3600 * 2
+    # eTimestamp = int(time.time())
+    # sTime = time.localtime(sTimestamp)
+    # eTime = time.localtime(eTimestamp)
+
+
+    # res = monitor.rfi_monitor_get_range(sTimestamp, eTimestamp, 0, channel=250)
+
+    # print "mode 0"
+    # print res
+    # print res.shape
+
+    # res = monitor.rfi_monitor_get_range(sTimestamp, eTimestamp, 1, channel=250)
+    # print "mode 1"
+    # print res
+    # print res.shape
+
+    # res = monitor.rfi_monitor_get_range(sTimestamp, eTimestamp, 2, channel=250)
+    # print "mode 2"
+    # print res
+    # print res.shape
+
+    # res = monitor.rfi_monitor_get_range(sTimestamp, eTimestamp, 3, channel=250)
+    # print "mode 3"
+    # print res
+    # print res.shape
+
+
     monitor = dbControl("localhost", "root", "kat", "monitor")
+    f = h5py.File('/home/ratty2/monitor/rfi_data/2014/09/17/05.h5', mode='r+')
 
-    mini = monitor.rfi_monitor_get_oldest_timestamp()
-    print "mini"
-    print mini
-    sTimestamp = int(time.time()) - 3600 * 2
-    eTimestamp = int(time.time())
-    sTime = time.localtime(sTimestamp)
-    eTime = time.localtime(eTimestamp)
-
-
-    res = monitor.rfi_monitor_get_range(sTimestamp, eTimestamp, 0, channel=250)
-
-    print "mode 0"
-    print res
-    print res.shape
-
-    res = monitor.rfi_monitor_get_range(sTimestamp, eTimestamp, 1, channel=250)
-    print "mode 1"
-    print res
-    print res.shape
-
-    res = monitor.rfi_monitor_get_range(sTimestamp, eTimestamp, 2, channel=250)
-    print "mode 2"
-    print res
-    print res.shape
-
-    res = monitor.rfi_monitor_get_range(sTimestamp, eTimestamp, 3, channel=250)
-    print "mode 3"
-    print res
-    print res.shape
-
-
-
-    #f = h5py.File('test.h5', mode='r+')
-    #f.create_dataset('spectra', (3600, 14200))
+    monitor.calc_hourly_data(1410930000, f)
+    # f.create_dataset('spectra', (3600, 14200))
     # spectrum, timestamp, last_cnt, stat = rat.getUnpackedData()
     # num_events = db.archive_get_val_at_time(int(time.time()) - 3600 - 3600, "num_events")
     # print"num_events"
