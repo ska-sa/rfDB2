@@ -60,6 +60,7 @@ def freq_to_chan(base_freq,frequency,n_chans, bandwidth, low_chan):
     return round(float(frequency - base_freq)/bandwidth*n_chans)%n_chans + low_chan
 
 def freq_to_chan_mode (frequency):
+    print "FREQUENCY = %f"%frequency
     if (frequency < modes[0]['base_freq']):
         print "Frequency too low"
         return None
@@ -70,8 +71,25 @@ def freq_to_chan_mode (frequency):
         max_freq = modes[i]['base_freq'] + modes[i]['bandwidth']
         n_chans = modes[i]['high_chan'] - modes[i]['low_chan']
         if ((frequency <= max_freq) & (frequency >= modes[i]['base_freq'])):
-            ret.append([i + 1, freq_to_chan(modes[i]['base_freq'] * 10e6, frequency * 10e6, n_chans, modes[i]['bandwidth'] * 10e6, modes[i]['low_chan'])])
+            freqs = getFreqs(i)
+            print freqs
+            index = find_closest(freqs, frequency)
+            ret.append([i+1, index])
     return ret
+
+# def freq_to_chan_mode (frequency):
+#     if (frequency < modes[0]['base_freq']):
+#         print "Frequency too low"
+#         return None
+#     ret = []
+#     import pdb
+#     # pdb.set_trace()
+#     for i in range (4): 
+#         max_freq = modes[i]['base_freq'] + modes[i]['bandwidth']
+#         n_chans = modes[i]['high_chan'] - modes[i]['low_chan']
+#         if ((frequency <= max_freq) & (frequency >= modes[i]['base_freq'])):
+#             ret.append([i + 1, freq_to_chan(modes[i]['base_freq'] * 10e6, frequency * 10e6, n_chans, modes[i]['bandwidth'] * 10e6, modes[i]['low_chan'])])
+#     return ret
 
 
 def chan_to_freq(mode, chan):
@@ -82,6 +100,37 @@ def chan_to_freq(mode, chan):
 
 def getFreqs(mode):
     return csv_to_array("%s/etc/ratty2/%s"%(root_dir, modes[mode]['fileName']))
+
+def find_closest(arr, v):
+    #A must be sorted
+    print type(v)
+    print arr.dtype
+    print v * 10e5
+    idx = (numpy.abs(arr - (v * 10e5))).argmin()
+    return idx
+
+def remove_internal_RFI(data, band):
+    # f = open("%s/etc/ratty2/band%i_RFI_mask.csv"%(root_dir,band))
+    # freqs = getFreqs(band)
+    # read=csv.reader(f)
+    indices = numpy.genfromtxt("%s/etc/ratty2/band%i_RFI_mask.csv"%(root_dir,band), delimiter=";")
+    # print indices[1:,0].astype(int)
+    indices = indices[1:,0].astype(int)
+    temp = numpy.zeros((indices.shape[0]*3), dtype=int)
+    temp[:indices.shape[0]] = indices
+    temp[indices.shape[0]:indices.shape[0]*2] = indices + 1
+    temp[indices.shape[0]*2:] = indices-1
+    indices = temp
+    # print indices
+    # indices = np.array(list(read)[1:]).astype(int)
+    mask = numpy.ones(data.shape, dtype=bool)
+    non_rfi = numpy.arange(data.shape[0], dtype=int)
+    mask[indices] = 0
+    mask[indices+1] = 0
+    mask[indices-1] = 0
+    non_rfi = non_rfi[mask]
+    data[indices] = numpy.interp(indices,non_rfi,data[non_rfi])
+    return data
 
 # def low_chan (mode):
 #     low_freq = getFreqs(mode)[0]/10e5
@@ -140,29 +189,29 @@ modes=[{'id':1,
         'bandwidth':900,
         'base_freq':0,
         'fileName':"mode1.csv",
-        'low_chan':0,
-        'high_chan':32766},
+        'low_chan':3641,
+        'high_chan':27308},
         {'id':2,
         'n_chan':32768,
         'bandwidth':600,
         'base_freq':600,
         'fileName':"mode2.csv",
-        'low_chan':0,
-        'high_chan':32766},
+        'low_chan':2731,
+        'high_chan':24577},
         {'id':3,
         'n_chan':32768,
         'bandwidth':846,
         'base_freq':855,
         'fileName':"mode3.csv",
-        'low_chan':0,
-        'high_chan':32766},
+        'low_chan':1725,
+        'high_chan':31236},
         {'id':4,
         'n_chan':32768,
         'bandwidth':900,
         'base_freq':1800,
         'fileName':"mode4.csv",
-        'low_chan':0,
-        'high_chan':32766}]
+        'low_chan':5462,
+        'high_chan':23667}]
 
 mode_chan_freq = []
 for m in modes:

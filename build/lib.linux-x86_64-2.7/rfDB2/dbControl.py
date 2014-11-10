@@ -260,6 +260,8 @@ class dbControl:
         timeDiff = endTuple - startTuple
         nSpectra = int(timeDiff.total_seconds())
         nHours = int(nSpectra/3600)
+        if nSpectra % 3600 > 0:
+            nHours += 1
 
         print "startTuple"
         print startTuple
@@ -293,11 +295,11 @@ class dbControl:
                 if m_c[0] in f['mode'][nSecs:3600]:
                     mode = m_c[0]
                     channel = m_c[1]
-                    indices = numpy.where(f['mode'][nSecs:3600] == mode)
+                    indices = numpy.where(f['mode'][nSecs -1:3600] == mode)
                 elif indices == None:
                     indices = []
 
-            ret[0:3600 - nSecs][indices] = f['spectra'][nSecs:3600,channel][indices]
+            ret[0:3600 - nSecs + 1][indices] = f['spectra'][nSecs - 1:3600,channel][indices]
             nSecs = 3600 - nSecs
             print "GOT %s"%location
             print "max = %f"%numpy.max(ret)

@@ -12,17 +12,22 @@ import current_spectra as cs
 import monitor_conf as cnf
 import dbControl
 
+
+import mmap
+
 import signal
 import sys
 
 numLoops = 10
-mode = 4
+# mode = None
 
 db = None
 p1 = None
 p2 = None
 p3 = None
 p4 = None
+
+rat = None #The ratty object
 
 def signal_handler(signal, frame):
     print "Exiting Cleanly"
@@ -42,6 +47,13 @@ def signal_handler(signal, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 def threadInsert (queue):
+    try:
+        mode = np.memmap("/tmp/band.dat", dtype="int32", mode = 'r', shape = (1,))
+    except IOError:
+        print "Shared memory mode fail"
+
+    print "Mode[0] = %i"%mode[0]
+
     db = dbControl.dbControl(cnf.monitor_db[0], cnf.monitor_db[1], cnf.monitor_db[2], cnf.monitor_db[3])
     current = cs.current_spectra()
     count = numLoops
@@ -56,7 +68,7 @@ def threadInsert (queue):
         os.makedirs(path)
     f = h5py.File(location, 'a')
     try:
-        f.create_dataset('spectra', (3600, cnf.modes[mode-1]['n_chan']),chunks = (4, cnf.modes[mode-1]['n_chan']), dtype = np.float32, compression='gzip', compression_opts=4)
+        f.create_dataset('spectra', (3600, cnf.modes[mode[0]-1]['n_chan']),chunks = (4, cnf.modes[mode[0]-1]['n_chan']), dtype = np.float32, compression='gzip', compression_opts=4)
         f.create_dataset('mode', (3600,), dtype=np.int8)
     except:
         print "file exists"
@@ -65,6 +77,10 @@ def threadInsert (queue):
     hourstart, hourend = dbControl.get_hour(data['timestamp'])
     count = 0
     while True:
+
+        while mode[0] == 0:
+            time.sleep(1)
+
         if (last_hour != localtime[3]): #If new hour
             #Save file
             f.flush()
@@ -96,7 +112,7 @@ def threadInsert (queue):
             if not os.path.exists(path):
                 os.makedirs(path)
             f = h5py.File(location, mode='w')
-            f.create_dataset('spectra', (3600, cnf.modes[mode -1]['n_chan']),chunks = (4, cnf.modes[mode -1]['n_chan']), dtype = np.float32, compression='gzip', compression_opts=4)
+            f.create_dataset('spectra', (3600, cnf.modes[mode[0] -1]['n_chan']),chunks = (4, cnf.modes[mode[0] -1]['n_chan']), dtype = np.float32, compression='gzip', compression_opts=4)
             f.create_dataset('mode', (3600,), dtype=np.int8)
 
             #reset time keeping variables to current hour
@@ -104,9 +120,9 @@ def threadInsert (queue):
             last_timestamp = data['timestamp']
             current.deleteOld(last_timestamp)
         # print "inserting to current" 
-        current.insertSpectrum(data['calibrated_spectrum'],data['timestamp'], mode)
+        current.insertSpectrum(data['calibrated_spectrum'],data['timestamp'], mode[0])
         # print "inserting to rfimonitor"
-        db.insertDump (data, mode, f)
+        db.insertDump (data, mode[0], f)
         # print "Done Inserting'"
         data = queue.get()
         #print "Timestamp = %i"%data[1]
@@ -141,13 +157,34 @@ def threadRFIDetection(timestamp, archive_added_event):
     
 def threadGetSpectrum (queue):
 
-    rat = ratty2.cam.spec(config_file='%s/etc/ratty2/default_band%i'%(cnf.root_dir, mode))
+    try:
+        mode = np.memmap("/tmp/band.dat", dtype="int32", mode = 'r', shape = (1,))
+    except IOError:
+        print "Shared memory mode fail"
 
+    print "mode[0] = %i"%mode[0]
+
+    rat = ratty2.cam.spec(config_file='%s/etc/ratty2/default_band%i'%(cnf.root_dir, mode[0]))
+
+    print "spec mode[0] = %i"%mode[0]
     rat.connect()
+    print "connect mode[0] = %i"%mode[0]
     rat.initialise(print_progress=True)
+    print "init [0] = %i"%mode[0]
     count = 0
     start = 0
     while True:
+        print "before mode[0] = %i"%mode[0]
+        if mode[0] == 0:
+            while mode[0] == 0:
+                time.sleep(0.1)
+            else:
+                rat = ratty2.cam.spec(config_file='%s/etc/ratty2/default_band%i'%(cnf.root_dir, mode[0]))
+
+                rat.connect()
+                rat.initialise(print_progress=True)
+
+        print "after"
         start = time.time()
         data = rat.get_spectrum()
         # print ("Time to get = %f"%(time.time() - start))
@@ -161,10 +198,29 @@ def threadGetSpectrum (queue):
         #print count
         # print data['calibrated_spectrum'].dtype
 
+def change_mode(m):
+
+    try:
+        mode = np.memmap("/tmp/band.dat", dtype="int32", mode = 'r+', shape = (1,))
+    except IOError:
+        mode = np.memmap("/tmp/band.dat", dtype="int32", mode = 'w+', shape = (1,))
+
+    mode[0] = 0
+    time.sleep(2)
+    mode[0] = m
+
+
 def run():
 
     print "start"
     queue = Queue()
+
+    try:
+        mode = np.memmap("/tmp/band.dat", dtype="int32", mode = 'r+', shape = (1,))
+    except IOError:
+        mode = np.memmap("/tmp/band.dat", dtype="int32", mode = 'w+', shape = (1,))
+
+    mode[0] = 3
 
     try:
         p = Process(target=threadGetSpectrum, args=(queue,))

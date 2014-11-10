@@ -27,7 +27,7 @@ class current_spectra:
                 self.timestamp = numpy.memmap("/tmp/timestamp.dat", dtype="int64", mode = 'r+', shape = (3600,))
                 self.modes = numpy.memmap("/tmp/modes.dat", dtype="int8", mode = 'r+', shape = (3600,))
                 self.head = numpy.memmap("/tmp/head.dat", dtype="int32", mode = 'r+', shape = (1,))
-            except FileNotFoundError:
+            except IOError:
                 self.current = numpy.memmap("/tmp/current.dat", dtype="float64", mode='w+', shape = (3600,cnf.modes[0]['n_chan']))
                 self.timestamp = numpy.memmap("/tmp/timestamp.dat", dtype="int64", mode = 'w+', shape = (3600,))
                 self.modes = numpy.memmap("/tmp/modes.dat", dtype="int8", mode = 'w+', shape = (3600,))
@@ -88,12 +88,15 @@ class current_spectra:
         # result = self.c_rfi.fetchone()
         # self.c_rfi.execute("FLUSH QUERY CACHE")
 
-        result = [self.curr, self.time[0], self.mode[0]]
+        data = numpy.copy(self.curr)
+
+        result = [cnf.remove_internal_RFI(data,self.mode[0]), self.time[0], self.mode[0]]
 
         # print "current timestamp = %i"%self.time[0]
 
         while self.last_timestamp == result[1]: #Current timestamp equals last timestamp
-            result = [self.curr, self.time[0], self.mode[0]]
+            data = numpy.copy(self.curr)
+            result = [cnf.remove_internal_RFI(data,self.mode[0]), self.time[0], self.mode[0]]
             time.sleep(0.1)
             # res = self.c_rfi.fetchall()
             # if res[0][0] != self.which_db: #Check if using the correct DB
